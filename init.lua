@@ -1,5 +1,5 @@
 -- ============================================
--- Right Command -> switch IME -> double tap Left Option
+-- Right Command -> switch IME -> double tap Right Option
 -- 放到 ~/.hammerspoon/init.lua
 -- 版本：保持当前可用行为，只修监听容易失效的问题
 -- ============================================
@@ -9,7 +9,7 @@ local alert = hs.alert
 -- 目标输入法
 local TARGET_INPUT_SOURCE = "豆包输入法"
 
--- 右侧 Command 按下后，多久再执行双击左 Option（秒）
+-- 右侧 Command 按下后，多久再执行双击右 Option（秒）
 local OPTION_PRESS_DELAY = 0.30
 
 -- 两次 Option 点击之间的间隔（秒）
@@ -26,6 +26,7 @@ local previousInputSource = nil
 local rightCmdIsDown = false
 local optionPressTimer = nil
 local restoreImeTimer = nil
+local voiceTriggered = false
 
 local function nowSource()
     local method = hs.keycodes.currentMethod()
@@ -53,19 +54,14 @@ local function debugCurrentInputState(prefix)
     log.df("[%s] currentSourceID = %s", prefix, tostring(hs.keycodes.currentSourceID()))
 end
 
-local function tapLeftOptionOnce()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, true):post()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, false):post()
-end
-
-local function doubleTapLeftOption()
-    log.df("开始模拟双击左 Option")
-    tapLeftOptionOnce()
-
-    hs.timer.doAfter(OPTION_DOUBLE_TAP_INTERVAL, function()
-        tapLeftOptionOnce()
-        log.df("已完成双击左 Option")
-    end)
+local function doubleTapRightOption()
+    log.df("开始模拟双击右 Option")
+    local cmd = string.format(
+        [[osascript -e 'tell application "System Events"' -e 'key code 61' -e 'delay %.2f' -e 'key code 61' -e 'end tell']],
+        OPTION_DOUBLE_TAP_INTERVAL
+    )
+    hs.execute(cmd)
+    log.df("已异步触发双击右 Option")
 end
 
 local function cancelOptionTimer()
@@ -86,9 +82,7 @@ end
 
 local function switchToTargetIME()
     local current = nowSource()
-    previousInputSource = current
 
-    -- 如果有输入法 XD
     if current == nil then
         log.df("无法识别当前输入来源，跳过记录")
     end
@@ -100,6 +94,7 @@ local function switchToTargetIME()
         return
     end
 
+    previousInputSource = current
     local ok = hs.keycodes.setMethod(TARGET_INPUT_SOURCE)
     log.df("切换到目标输入法: %s, 结果: %s", TARGET_INPUT_SOURCE, tostring(ok))
 
@@ -154,22 +149,22 @@ local function onRightCmdDown()
     end
 
     rightCmdIsDown = true
+    voiceTriggered = false
     log.df("检测到右 Command 按下")
 
-    -- 新一轮开始时，取消上一次尚未执行的恢复动作
     cancelRestoreImeTimer()
-
     switchToTargetIME()
 
     cancelOptionTimer()
     optionPressTimer = hs.timer.doAfter(OPTION_PRESS_DELAY, function()
         optionPressTimer = nil
 
-        if rightCmdIsDown then
-            log.df("延迟结束，右 Command 仍按着，准备双击左 Option")
-            doubleTapLeftOption()
+        if rightCmdIsDown and not voiceTriggered then
+            log.df("延迟结束，右 Command 仍按着，触发双击右 Option")
+            voiceTriggered = true
+            doubleTapRightOption()
         else
-            log.df("延迟结束时右 Command 已松开，不再双击左 Option")
+            log.df("延迟结束时右 Command 已松开或已触发，跳过")
         end
     end)
 end
@@ -184,14 +179,19 @@ local function onRightCmdUp()
     log.df("检测到右 Command 松开")
 
     cancelOptionTimer()
-    doubleTapLeftOption()
 
-    -- 延迟恢复原输入法
-    scheduleRestorePreviousIME()
+    if not voiceTriggered then
+        voiceTriggered = true
+        hs.timer.doAfter(OPTION_PRESS_DELAY, function()
+            log.df("右 Cmd 已松开，延迟后触发双击右 Option")
+            doubleTapRightOption()
+            scheduleRestorePreviousIME()
+        end)
+    else
+        scheduleRestorePreviousIME()
+    end
 end
 
--- 核心修复 1：只要检测到 rightcmd 的 flagsChanged，
--- 就根据内部状态翻转，而不是依赖 flags.cmd
 local function handleRightCmdFlagsChanged(event)
     local keycode = event:getKeyCode()
     local flags = event:getFlags()
@@ -200,14 +200,17 @@ local function handleRightCmdFlagsChanged(event)
         return false
     end
 
-    -- log.df("flagsChanged: keycode=%s, cmd=%s, alt=%s, shift=%s, ctrl=%s, rightCmdIsDown=%s", tostring(keycode),
-    --     tostring(flags.cmd), tostring(flags.alt), tostring(flags.shift), tostring(flags.ctrl), tostring(rightCmdIsDown))
+    local cmdIsDown = not not flags.cmd
 
-    if rightCmdIsDown then
-        onRightCmdUp()
-    else
+    log.df("flagsChanged: keycode=%s, cmd=%s, rightCmdIsDown=%s",
+        tostring(keycode), tostring(cmdIsDown), tostring(rightCmdIsDown))
+
+    if cmdIsDown and not rightCmdIsDown then
         onRightCmdDown()
+    elseif not cmdIsDown and rightCmdIsDown then
+        onRightCmdUp()
     end
+    -- 状态已经匹配，忽略冗余 flagsChanged 事件
 
     return false
 end
