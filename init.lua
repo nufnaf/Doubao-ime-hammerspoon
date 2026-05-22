@@ -1,5 +1,5 @@
 -- ============================================
--- Right Command -> switch IME -> double tap Right Option
+-- 按住右 Command -> 切换豆包输入法 -> 合成 Cmd 事件触发豆包长按探测 -> 松开后恢复
 -- 放到 ~/.hammerspoon/init.lua
 -- 版本：保持当前可用行为，只修监听容易失效的问题
 -- ============================================
@@ -55,13 +55,12 @@ local function debugCurrentInputState(prefix)
 end
 
 local function doubleTapRightOption()
-    log.df("开始模拟双击右 Option")
-    local cmd = string.format(
-        [[osascript -e 'tell application "System Events"' -e 'key code 61' -e 'delay %.2f' -e 'key code 61' -e 'end tell']],
-        OPTION_DOUBLE_TAP_INTERVAL
-    )
-    hs.execute(cmd)
-    log.df("已异步触发双击右 Option")
+    log.df("开始模拟双击右 Option（回退方案）")
+    hs.osascript.applescript([[tell application "System Events" to key code 61]])
+    hs.timer.doAfter(OPTION_DOUBLE_TAP_INTERVAL, function()
+        hs.osascript.applescript([[tell application "System Events" to key code 61]])
+        log.df("已完成双击右 Option")
+    end)
 end
 
 local function cancelOptionTimer()
@@ -160,9 +159,9 @@ local function onRightCmdDown()
         optionPressTimer = nil
 
         if rightCmdIsDown and not voiceTriggered then
-            log.df("延迟结束，右 Command 仍按着，触发双击右 Option")
+            log.df("延迟结束，右 Command 仍按着，发送合成 Cmd 按下事件触发豆包长按探测")
             voiceTriggered = true
-            doubleTapRightOption()
+            hs.eventtap.event.newKeyEvent(hs.keycodes.map.rightcmd, true):post()
         else
             log.df("延迟结束时右 Command 已松开或已触发，跳过")
         end
@@ -182,8 +181,8 @@ local function onRightCmdUp()
 
     if not voiceTriggered then
         voiceTriggered = true
+        log.df("右 Cmd 短按，使用右 Option 双击回退方案")
         hs.timer.doAfter(OPTION_PRESS_DELAY, function()
-            log.df("右 Cmd 已松开，延迟后触发双击右 Option")
             doubleTapRightOption()
             scheduleRestorePreviousIME()
         end)
